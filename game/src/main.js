@@ -11,6 +11,7 @@ import { createHud, updateHud, addFeed, toggleBuyMenu, handleBuyClick, renderSco
 import { createGrenades, throwGrenade, updateGrenades, GRENADE_COUNT } from './grenade.js';
 import { createPickups, updatePickups } from './pickups.js';
 import { initMinimap } from './minimap.js';
+import { initDamageFeed } from './damagefeed.js';
 import { unlockAudio, playShot, playFootstep, playReload } from './sfx.js';
 
 const container = document.getElementById('game');
@@ -34,6 +35,7 @@ const rounds = createRounds();
 const hud = createHud();
 const grenades = createGrenades();
 const pickups = createPickups(scene);
+const damageFeed = initDamageFeed(camera);
 let kills = 0;
 
 // radar overlay: canvas built from colliders + roster once, updated per frame
@@ -42,6 +44,7 @@ const updateMinimap = initMinimap(scene, colliders, everyone);
 // scratch objects: reused every shot so the fire loop allocates nothing per frame
 const _eye = new THREE.Vector3(), _dir = new THREE.Vector3(), _ray = new THREE.Raycaster();
 const _tmp = new THREE.Vector3();
+const _hitDir = new THREE.Vector3();
 const _bodyBox = new THREE.Box3(), _headBox = new THREE.Box3();
 const _bodySize = new THREE.Vector3(0.7, 1.1, 0.5), _bodyCenter = new THREE.Vector3();
 const _headSize = new THREE.Vector3(0.45, 0.45, 0.45), _headCenter = new THREE.Vector3();
@@ -112,6 +115,12 @@ function botShoot(bot, target, dmg) {
     _tmp.z += (Math.random() - 0.5) * 0.3;
     addTracer(scene, _eye, _tmp);
     const killed = damage(target, dmg, false);
+    // when the player is the victim, flash the directional indicator toward
+    // the attacker and pop a floating damage number
+    if (target === player && player.alive) {
+      _hitDir.subVectors(_eye, player.pos);
+      damageFeed.showHitFrom(_hitDir, dmg);
+    }
     if (killed) {
       bot.kills++;
       if (target === player) respawnPlayer();
@@ -267,6 +276,7 @@ sim.systems.push((dt, tick) => {
 const hudState = { player, weapon, rounds, everyone, grenades, scoreboard: false };
 view.callbacks.push(() => {
   updateMinimap(); // radar redraw, allocation-free
+  damageFeed.update(engine.view.delta);
   updateHud(hud, { ...hudState, scoreboard: hud.scoreboard });
   const copy = document.getElementById('overlay-copy');
   if (copy && rounds.phase === 'over') copy.textContent = rounds.matchOver
