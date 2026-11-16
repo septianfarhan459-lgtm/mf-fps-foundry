@@ -1,8 +1,8 @@
 // main.js: wires the game together - boot, loop, shooting, grenades, pickups, scoreboard, rounds.
 import * as THREE from 'three';
 import { createEngine, TICK } from './engine.js';
-import { initInput, consumeLook, mouse, keys } from './input.js';
-import { buildWorld, spawns, TEAM_BLUE, TEAM_ORANGE } from './world.js';
+import { initInput, consumeLook, mouse, keys, pollGamepad, gamepad } from './input.js';
+import { buildWorld, spawns, TEAM_BLUE, TEAM_ORANGE, colliders } from './world.js';
 import { createPlayer, updatePlayer, eyePos, damage } from './player.js';
 import { createWeapon, updateWeapon, tryFire, startReload, switchWeapon, WEAPONS, addTracer, updateTracers, HITMARKER_DELAY } from './weapon.js';
 import { createBots, updateBot } from './bots.js';
@@ -10,6 +10,7 @@ import { createRounds, startRound, updateRounds, KILL_REWARD } from './rounds.js
 import { createHud, updateHud, addFeed, toggleBuyMenu, handleBuyClick, renderScoreboard, setAmmoHint } from './hud.js';
 import { createGrenades, throwGrenade, updateGrenades, GRENADE_COUNT } from './grenade.js';
 import { createPickups, updatePickups } from './pickups.js';
+import { initMinimap } from './minimap.js';
 import { unlockAudio, playShot, playFootstep, playReload } from './sfx.js';
 
 const container = document.getElementById('game');
@@ -34,6 +35,9 @@ const hud = createHud();
 const grenades = createGrenades();
 const pickups = createPickups(scene);
 let kills = 0;
+
+// radar overlay: canvas built from colliders + roster once, updated per frame
+const updateMinimap = initMinimap(scene, colliders, everyone);
 
 // scratch objects: reused every shot so the fire loop allocates nothing per frame
 const _eye = new THREE.Vector3(), _dir = new THREE.Vector3(), _ray = new THREE.Raycaster();
@@ -199,6 +203,23 @@ let footTimer = 0;
 let ammoHint = false;
 sim.systems.push((dt, tick) => {
   const look = consumeLook();
+  // gamepad: poll the pad each tick; its look deltas ride the same channel
+  // as the mouse (added into `look`), its stick feeds movement intents.
+  const padLive = pollGamepad();
+  // Pad movement maps onto the WASD intents, but only while the stick is
+  // actually deflected - a centred stick must release the mirrored keys so
+  // a tap of the keyboard afterwards is not fought by a stale pad hold.
+  const padAxes = { KeyW: 0, KeyS: 0, KeyA: 0, KeyD: 0 };
+  if (padLive) {
+    look[0] += gamepad.look[0];
+    look[1] += gamepad.look[1];
+    if (gamepad.move[1] > 0.01) padAxes.KeyW = 1;
+    if (gamepad.move[1] < -0.01) padAxes.KeyS = 1;
+    if (gamepad.move[0] > 0.01) padAxes.KeyD = 1;
+    if (gamepad.move[0] < -0.01) padAxes.KeyA = 1;
+    if (gamepad.fire) mouse.fire = true;
+  }
+  for (const k in padAxes) keys[k] = keys[k] || padAxes[k];
   const moving = Math.hypot(player.vel.x, player.vel.z) > 1;
   updatePlayer(player, dt, look);
   updateWeapon(weapon, dt, moving, !player.onGround);
@@ -245,6 +266,7 @@ sim.systems.push((dt, tick) => {
 // HUD per frame
 const hudState = { player, weapon, rounds, everyone, grenades, scoreboard: false };
 view.callbacks.push(() => {
+  updateMinimap(); // radar redraw, allocation-free
   updateHud(hud, { ...hudState, scoreboard: hud.scoreboard });
   const copy = document.getElementById('overlay-copy');
   if (copy && rounds.phase === 'over') copy.textContent = rounds.matchOver
