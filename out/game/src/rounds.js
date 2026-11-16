@@ -1,4 +1,5 @@
 // rounds.js: round state machine - buy time, round timer, win conditions, economy.
+export const ROUND_WIN_TARGET = 8;
 export const BUY_TIME = 10, ROUND_TIME = 90, WIN_REWARD = 3250, LOSS_REWARD = 1400, KILL_REWARD = 300;
 
 export function createRounds() {
@@ -55,5 +56,5 @@ function endRound(r, winner, players) {
     if (p.team === winner) p.money = Math.min(16000, p.money + WIN_REWARD);
     else p.money = Math.min(16000, p.money + LOSS_REWARD);
   }
-  if (r.score[0] >= 8 || r.score[1] >= 8) r.matchOver = true;
+  if (r.score[0] >= ROUND_WIN_TARGET || r.score[1] >= ROUND_WIN_TARGET) r.matchOver = true;
 }
