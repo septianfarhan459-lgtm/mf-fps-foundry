@@ -1,22 +1,47 @@
-// weapon.js: the rifle - hitscan, recoil, spread, reload, tracers.
+// weapon.js: the rifle - hitscan, recoil (exponential recovery), spread that
+// blooms while firing and decays once you stop, reload, tracers.
 import * as THREE from 'three';
 
 export const WEAPONS = {
   rifle:  { name: 'Rifle',  dmg: 26, mag: 30, reserve: 90, rpm: 600, spread: 0.012, moveSpread: 0.05, recoil: 0.019, reloadTime: 2.2, price: 0 },
   smg:    { name: 'SMG',    dmg: 18, mag: 30, reserve: 120, rpm: 800, spread: 0.02, moveSpread: 0.035, recoil: 0.011, reloadTime: 1.8, price: 1000 },
-  sniper: { name: 'DMR',    dmg: 70, mag: 10, reserve: 30, rpm: 120, spread: 0.001, moveSpread: 0.08, recoil: 0.05, reloadTime: 2.8, price: 2500 },
+  sniper: { name: 'DMR',    dmg: 70, mag: 10, reserve: 30, rpm: 90, spread: 0.001, moveSpread: 0.08, recoil: 0.05, reloadTime: 3.1, price: 2500 },
 };
 export const BUYABLE = ['rifle', 'smg', 'sniper'];
 
+// recoil recovery: exponential decay toward 0 at RECOIL_RECOVER per second
+const RECOIL_RECOVER = 3.5;
+// spread settle: how fast movement bloom fades after you stop moving
+const SPREAD_DECAY = 3.5;
+
 export function createWeapon() {
-  return { type: 'rifle', mag: 30, reserve: 90, cooldown: 0, reloading: 0, recoilPitch: 0, shotsFired: 0 };
+  return { type: 'rifle', mag: 30, reserve: 90, cooldown: 0, reloading: 0, recoilPitch: 0, shotsFired: 0, spreadKick: 0, sinceShot: 0 };
 }
 
-export function switchWeapon(w, type) { w.type = type; w.mag = WEAPONS[type].mag; w.reserve = WEAPONS[type].reserve; w.reloading = 0; }
+export function switchWeapon(w, type) { w.type = type; w.mag = WEAPONS[type].mag; w.reserve = WEAPONS[type].reserve; w.reloading = 0; w.shotsFired = 0; w.spreadKick = 0; }
 
 export function updateWeapon(w, dt, moving, airborne) {
   w.cooldown = Math.max(0, w.cooldown - dt);
-  w.recoilPitch = Math.max(0, w.recoilPitch - dt * 0.9);
+
+  // exponential recoil recovery: pitch decays toward zero, rate 3.5/s.
+  // exp(-k*dt) is frame-rate independent, unlike the old linear crawl.
+  if (w.recoilPitch > 0) {
+    w.recoilPitch *= Math.exp(-RECOIL_RECOVER * dt);
+    if (w.recoilPitch < 1e-4) w.recoilPitch = 0;
+  }
+
+  // spread bloom decays after stopping: shotsFired fades toward 0 when the
+  // weapon has not fired recently, so the extra accuracy penalty from
+  // sustained fire unwinds instead of sticking forever.
+  if (w.cooldown > 0) w.sinceShot = 0;
+  else w.sinceShot += dt;
+  if (w.sinceShot > 0.25 && w.shotsFired > 0) {
+    w.shotsFired = Math.max(0, w.shotsFired - SPREAD_DECAY * dt);
+  }
+  // movement settle: going from run to aim eases the moveSpread off smoothly
+  const targetKick = moving ? 1 : 0;
+  w.spreadKick += (targetKick - w.spreadKick) * Math.min(1, SPREAD_DECAY * dt);
+
   if (w.reloading > 0) {
     w.reloading -= dt;
     if (w.reloading <= 0) {
@@ -26,7 +51,9 @@ export function updateWeapon(w, dt, moving, airborne) {
       w.mag += take; w.reserve -= take;
     }
   }
-  w.currentSpread = WEAPONS[w.type].spread + (moving ? WEAPONS[w.type].moveSpread : 0) + (airborne ? 0.07 : 0) + Math.min(0.03, w.shotsFired * 0.002);
+  const spec = WEAPONS[w.type];
+  const moveBloom = spec.moveSpread * w.spreadKick;
+  w.currentSpread = spec.spread + moveBloom + (airborne ? 0.07 : 0) + Math.min(0.03, w.shotsFired * 0.002);
 }
 
 export function tryFire(w, holdingFire) {
@@ -36,6 +63,7 @@ export function tryFire(w, holdingFire) {
   w.cooldown = 60 / spec.rpm;
   w.mag--;
   w.shotsFired++;
+  w.sinceShot = 0;
   w.recoilPitch += spec.recoil;
   return true;
 }

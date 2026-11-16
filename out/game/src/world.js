@@ -51,6 +51,11 @@ export function buildWorld(scene) {
   a.position.set(-40, 0.1, 0); scene.add(a);
   // bombsite B (east)
   const b = new THREE.Mesh(new THREE.BoxGeometry(14, 0.2, 14), new THREE.MeshLambertMaterial({ color: ACCENT_B }));
+
+  // bombsite cover: steel crates so pushes onto A/B have somewhere to break LOS
+  scene.add(box(-45, 0, -5, 2.5, 2, 2.5, STEEL));
+  scene.add(box(-33, 0, 8, 2.5, 2, 2.5, STEEL));
+  scene.add(box(41, 0, -6, 2.5, 2, 2.5, STEEL));
   b.position.set(40, 0.1, 0); scene.add(b);
   // catwalks (low platforms you can jump on)
   scene.add(box(-18, 0, -44, 20, 1.5, 6, STEEL));
