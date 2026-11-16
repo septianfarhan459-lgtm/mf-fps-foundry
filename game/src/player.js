@@ -1,9 +1,12 @@
-// player.js: the first-person controller - movement, collision, health.
+// player.js: the first-person controller - movement, collision, health, head-bob.
 import * as THREE from 'three';
 import { keys } from './input.js';
 import { colliders } from './world.js';
 
 const EYE = 1.7, EYE_CROUCH = 1.1, RADIUS = 0.4, ACCEL = 42, FRICTION = 9, SPEED = 7.2, CROUCH_SPEED = 3.6, JUMP = 7.4, GRAVITY = 22;
+// head-bob: subtle vertical sway while running on the ground. Amplitude is
+// hard-capped at 0.03 and eases in with speed so it never looks like a glitch.
+const BOB_MAX = 0.03, BOB_MIN_SPEED = 2, BOB_RATE = 9.5;
 
 export function createPlayer(team) {
   return {
@@ -13,6 +16,7 @@ export function createPlayer(team) {
     health: 100, armor: 0, alive: true,
     money: 800, kills: 0, deaths: 0,
     height: EYE,
+    bobPhase: 0, bobAmp: 0,      // head-bob state
   };
 }
 
@@ -30,7 +34,7 @@ function collideAxis(pos, axis, dir) {
   return false;
 }
 
-export function updatePlayer(p, dt, look, world) {
+export function updatePlayer(p, dt, look) {
   // look
   p.yaw -= look[0] * 0.0023;
   p.pitch -= look[1] * 0.0023;
@@ -68,10 +72,23 @@ export function updatePlayer(p, dt, look, world) {
   if (p.pos.y < -5) { p.pos.set(0, 0.1, 44); p.vel.set(0,0,0); } // safety respawn
 
   p.height = p.crouch ? EYE_CROUCH : EYE;
+
+  // head-bob: only on the ground, only above a walk threshold, eased toward
+  // the cap as speed rises; the phase accumulator keeps step rhythm stable.
+  const speed = Math.hypot(p.vel.x, p.vel.z);
+  if (p.onGround && speed > BOB_MIN_SPEED) {
+    const target = Math.min(BOB_MAX, BOB_MAX * (speed - BOB_MIN_SPEED) / (SPEED - BOB_MIN_SPEED));
+    p.bobAmp += (target - p.bobAmp) * Math.min(1, 6 * dt);
+    p.bobPhase += BOB_RATE * dt;
+  } else {
+    p.bobAmp += (0 - p.bobAmp) * Math.min(1, 6 * dt);
+    if (p.bobAmp < 1e-4) p.bobAmp = 0;
+  }
 }
 
 export function eyePos(p, out) {
-  return out.set(p.pos.x, p.pos.y + p.height, p.pos.z);
+  const bob = p.bobAmp ? Math.sin(p.bobPhase) * p.bobAmp : 0;
+  return out.set(p.pos.x, p.pos.y + p.height + bob, p.pos.z);
 }
 
 export function damage(p, amount, headshot) {

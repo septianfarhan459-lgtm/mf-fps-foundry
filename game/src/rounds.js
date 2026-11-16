@@ -10,6 +10,7 @@ export function createRounds() {
     score: [0, 0],         // blue, orange
     roundWinner: null,
     matchOver: false,
+    drawn: false,          // true when the round timed out with even alive counts
   };
 }
 
@@ -18,6 +19,7 @@ export function startRound(r, players) {
   r.phase = 'buy';
   r.timer = BUY_TIME;
   r.roundWinner = null;
+  r.drawn = false;
   for (const p of players) {
     p.alive = true;
     p.health = 100;
@@ -39,8 +41,10 @@ export function updateRounds(r, dt, players, onEnd) {
       endRound(r, winner, players);
       onEnd && onEnd(winner);
     } else if (r.timer <= 0) {
-      // time out: the team with more players alive wins, else draw -> blue
+      // time out: more players alive wins; equal counts is a DRAW - winner 0
+      // (blue hosts) but `drawn` flags it so the feed can say so honestly.
       const winner = orangeAlive > blueAlive ? 1 : 0;
+      r.drawn = orangeAlive === blueAlive;
       endRound(r, winner, players);
       onEnd && onEnd(winner);
     }

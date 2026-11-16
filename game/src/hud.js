@@ -19,6 +19,33 @@ export function addFeed(hud, text) {
   if (box) box.innerHTML = hud.feed.map((t) => `<li>${t}</li>`).join('');
 }
 
+// One-time DOM: status strip under the ammo counter for RELOADING / empty-mag.
+// Elements are created lazily and only toggled, never rebuilt per frame.
+let statusEl = null;
+function status() {
+  if (!statusEl) {
+    statusEl = document.createElement('div');
+    statusEl.id = 'ammo-status';
+    statusEl.style.cssText = 'font-size:11px;letter-spacing:1px;margin-top:2px;color:var(--accent, #c25038);min-height:14px;';
+    const ammo = el('ammo');
+    if (ammo && ammo.parentNode) ammo.parentNode.insertBefore(statusEl, ammo.nextSibling);
+  }
+  return statusEl;
+}
+
+export function setAmmoHint(show) {
+  const s = status();
+  s.dataset.hint = show ? '1' : '';
+  refreshStatus();
+}
+
+function refreshStatus() {
+  if (!statusEl) return;
+  const reloading = statusEl.dataset.reloading === '1';
+  const hint = statusEl.dataset.hint === '1';
+  statusEl.textContent = reloading ? 'RELOADING' : (hint ? 'MAG EMPTY - grab an ammo crate' : '');
+}
+
 export function updateHud(hud, state) {
   const { player, weapon, rounds, phase } = state;
   const hp = el('hud-health');
@@ -27,6 +54,13 @@ export function updateHud(hud, state) {
   const mag = el('ammo-mag'); if (mag) mag.textContent = weapon.reloading > 0 ? '--' : weapon.mag;
   const res = el('ammo-reserve'); if (res) res.textContent = `/ ${weapon.reserve}`;
   const ammo = el('ammo'); if (ammo) ammo.classList.toggle('empty', weapon.mag <= 5);
+  // RELOADING indicator: on while a reload is in progress
+  const reloading = weapon.reloading > 0;
+  const s = status();
+  if (s) {
+    const was = s.dataset.reloading === '1';
+    if (was !== reloading) { s.dataset.reloading = reloading ? '1' : ''; refreshStatus(); }
+  }
   const timer = el('hud-timer');
   if (timer) {
     const t = Math.max(0, Math.ceil(rounds.timer));

@@ -9,6 +9,9 @@ export const WEAPONS = {
 };
 export const BUYABLE = ['rifle', 'smg', 'sniper'];
 
+// hit-confirm delay: how long the hitmarker stays on after a confirmed hit
+export const HITMARKER_DELAY = 110;
+
 // recoil recovery: exponential decay toward 0 at RECOIL_RECOVER per second
 const RECOIL_RECOVER = 3.5;
 // spread settle: how fast movement bloom fades after you stop moving
@@ -24,7 +27,7 @@ export function updateWeapon(w, dt, moving, airborne) {
   w.cooldown = Math.max(0, w.cooldown - dt);
 
   // exponential recoil recovery: pitch decays toward zero, rate 3.5/s.
-  // exp(-k*dt) is frame-rate independent, unlike the old linear crawl.
+  // exp(-k*dt) is frame-rate independent, unlike a linear crawl.
   if (w.recoilPitch > 0) {
     w.recoilPitch *= Math.exp(-RECOIL_RECOVER * dt);
     if (w.recoilPitch < 1e-4) w.recoilPitch = 0;

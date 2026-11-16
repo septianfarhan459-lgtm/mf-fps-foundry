@@ -1,5 +1,5 @@
-// bots.js: enemy team - waypoint patrol, line of sight, engage, burst fire and
-// a wounded "take cover" behaviour that breaks line of sight before re-peeking.
+// bots.js: enemy team - waypoint patrol, line of sight, engage, burst fire,
+// wounded "take cover" behaviour, and crouching while pinned in cover.
 import * as THREE from 'three';
 import { colliders, waypoints, waypointLinks } from './world.js';
 import { createPlayer, eyePos } from './player.js';
@@ -10,6 +10,8 @@ const BOT_SPEED = 4.6, SIGHT = 55, FIRE_CD = 0.42;
 const BURST_GAP = 0.12, BURST_MIN = 2, BURST_MAX = 3;
 // take cover: a hurt bot hugs the nearest solid box and holds for 1.5s
 const COVER_HEALTH = 40, COVER_WAIT = 1.5, COVER_RADIUS = 20, COVER_REENTER = 3.0;
+// crouch while in cover: smaller profile, harder to be re-spotted while pinned
+const CROUCH_SIGHT_SCALE = 0.82; // crouched bot eye height scales its sightline
 
 function boxMesh(color) {
   const g = new THREE.Group();
@@ -40,6 +42,7 @@ export function createBots(scene, team, count) {
     // burst + cover bookkeeping
     p.burst = 0; p.burstIdx = 0; p.burstCd = 0;
     p.coverPos = null; p.coverWait = 0; p.coverCd = 0;
+    p.crouch = false;
     bots.push(p);
   }
   return bots;
@@ -118,6 +121,7 @@ function fireRound(bot, target, dist, onShot, index) {
 }
 
 const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3();
+const tmpGoal = new THREE.Vector3(), tmpDir = new THREE.Vector3();
 
 export function updateBot(bot, dt, target, others, onShot) {
   if (!bot.alive) return;
@@ -143,9 +147,13 @@ export function updateBot(bot, dt, target, others, onShot) {
     } else if (bot.state === 'engage') bot.state = 'seek';
   } else bot.state = 'patrol';
 
+  // crouch flag: true only while holding the cover spot (exposed to aim code
+  // and the mesh renderer, which lowers the body below cover height)
+  bot.crouch = bot.state === 'cover' && !!bot.coverPos;
+
   if (bot.state === 'patrol') {
-    const goal = new THREE.Vector3(...waypoints[bot.wp]);
-    const dir = goal.sub(bot.pos);
+    const goal = tmpGoal.set(waypoints[bot.wp][0], 0, waypoints[bot.wp][2]);
+    const dir = tmpDir.subVectors(goal, bot.pos);
     dir.y = 0;
     if (dir.length() < 1.5) {
       const nb = neighbours(bot.wp);
@@ -157,20 +165,24 @@ export function updateBot(bot, dt, target, others, onShot) {
       bot.yaw = Math.atan2(-dir.x, -dir.z);
     }
   } else if (bot.state === 'seek' && bot.lastSeen) {
-    const dir = bot.lastSeen.clone().sub(bot.pos); dir.y = 0;
-    if (dir.length() < 2) { bot.state = 'patrol'; bot.lastSeen = null; }
-    else { dir.normalize(); bot.pos.x += dir.x * BOT_SPEED * dt; bot.pos.z += dir.z * BOT_SPEED * dt; }
+    const dx = bot.lastSeen.x - bot.pos.x, dz = bot.lastSeen.z - bot.pos.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 2) { bot.state = 'patrol'; bot.lastSeen = null; }
+    else {
+      bot.pos.x += (dx / d) * BOT_SPEED * dt;
+      bot.pos.z += (dz / d) * BOT_SPEED * dt;
+    }
   } else if (bot.state === 'cover' && bot.coverPos) {
     const dx = bot.coverPos.x - bot.pos.x, dz = bot.coverPos.z - bot.pos.z;
     const d = Math.hypot(dx, dz);
     if (d > 0.6) {
-      // sprint to the box, then hold
+      // sprint to the box, then hold (and crouch once arrived)
       const nx = dx / d, nz = dz / d;
       bot.pos.x += nx * BOT_SPEED * 1.15 * dt;
       bot.pos.z += nz * BOT_SPEED * 1.15 * dt;
       bot.yaw = Math.atan2(-nx, -nz);
     } else if (target) {
-      const tt = new THREE.Vector3().subVectors(target.pos, bot.pos);
+      const tt = tmpDir.subVectors(target.pos, bot.pos);
       bot.yaw = Math.atan2(-tt.x, -tt.z);        // keep eyes on the threat while pinned
       bot.coverWait -= dt;
       if (bot.coverWait <= 0) {
@@ -182,7 +194,7 @@ export function updateBot(bot, dt, target, others, onShot) {
     }
   } else if (bot.state === 'engage' && target) {
     // strafe + face target + burst fire
-    const toT = new THREE.Vector3().subVectors(target.pos, bot.pos); toT.y = 0;
+    const toT = tmpDir.subVectors(target.pos, bot.pos); toT.y = 0;
     const dist = toT.length();
     toT.normalize();
     bot.yaw = Math.atan2(-toT.x, -toT.z);
@@ -211,5 +223,8 @@ export function updateBot(bot, dt, target, others, onShot) {
   bot.pos.z = Math.max(-56, Math.min(56, bot.pos.z));
   bot.mesh.position.copy(bot.pos);
   bot.mesh.rotation.y = bot.yaw;
+  // crouch pose: lower the whole body group so head/body sit behind cover
+  const targetY = bot.crouch ? -0.55 : 0;
+  bot.mesh.position.y = bot.pos.y + targetY;
   bot.mesh.visible = true;
 }
