@@ -27,9 +27,13 @@ export function buildWorld(scene) {
   scene.add(box(0, 0, 60, 120, 8, 2, WALL));
   scene.add(box(-60, 0, 0, 2, 8, 120, WALL));
   scene.add(box(60, 0, 0, 2, 8, 120, WALL));
-  // mid lane: long corridor with cover crates
+  // mid lane: long corridor with cover crates. The two inner crates sit
+  // diagonal to the originals so a mid push can stagger cover-to-cover
+  // instead of crossing one long open stretch.
   scene.add(box(-10, 0, -10, 4, 3, 4, CRATE));
   scene.add(box(10, 0, 10, 4, 3, 4, CRATE));
+  scene.add(box(-7, 0, 6, 4, 2.6, 4, CRATE));
+  scene.add(box(7, 0, -6, 4, 2.6, 4, CRATE));
   scene.add(box(0, 0, -24, 6, 2.5, 3, WALL));
   scene.add(box(0, 0, 24, 6, 2.5, 3, WALL));
   scene.add(box(-24, 0, 0, 3, 2.5, 6, WALL));
@@ -51,7 +55,6 @@ export function buildWorld(scene) {
   a.position.set(-40, 0.1, 0); scene.add(a);
   // bombsite B (east)
   const b = new THREE.Mesh(new THREE.BoxGeometry(14, 0.2, 14), new THREE.MeshLambertMaterial({ color: ACCENT_B }));
-
   // bombsite cover: steel crates so pushes onto A/B have somewhere to break LOS
   scene.add(box(-45, 0, -5, 2.5, 2, 2.5, STEEL));
   scene.add(box(-33, 0, 8, 2.5, 2, 2.5, STEEL));

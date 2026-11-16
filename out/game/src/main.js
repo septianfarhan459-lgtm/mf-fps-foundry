@@ -4,10 +4,10 @@ import { createEngine, TICK } from './engine.js';
 import { initInput, consumeLook, mouse, keys } from './input.js';
 import { buildWorld, spawns, TEAM_BLUE, TEAM_ORANGE } from './world.js';
 import { createPlayer, updatePlayer, eyePos, damage } from './player.js';
-import { createWeapon, updateWeapon, tryFire, startReload, switchWeapon, WEAPONS, addTracer, updateTracers } from './weapon.js';
+import { createWeapon, updateWeapon, tryFire, startReload, switchWeapon, WEAPONS, addTracer, updateTracers, HITMARKER_DELAY } from './weapon.js';
 import { createBots, updateBot } from './bots.js';
 import { createRounds, startRound, updateRounds, KILL_REWARD } from './rounds.js';
-import { createHud, updateHud, addFeed, toggleBuyMenu, handleBuyClick, renderScoreboard } from './hud.js';
+import { createHud, updateHud, addFeed, toggleBuyMenu, handleBuyClick, renderScoreboard, setAmmoHint } from './hud.js';
 import { createGrenades, throwGrenade, updateGrenades, GRENADE_COUNT } from './grenade.js';
 import { createPickups, updatePickups } from './pickups.js';
 import { unlockAudio, playShot, playFootstep, playReload } from './sfx.js';
@@ -17,9 +17,7 @@ const engine = createEngine(container);
 const { scene, camera, view, sim } = engine;
 
 buildWorld(scene);
-initInput(rendererCanvas());
-
-function rendererCanvas() { return engine.renderer.domElement; }
+initInput(engine.renderer.domElement);
 
 // players: human on blue, 5 bots orange, 4 bot teammates blue
 const player = createPlayer(TEAM_BLUE);
@@ -37,10 +35,19 @@ const grenades = createGrenades();
 const pickups = createPickups(scene);
 let kills = 0;
 
+// scratch objects: reused every shot so the fire loop allocates nothing per frame
 const _eye = new THREE.Vector3(), _dir = new THREE.Vector3(), _ray = new THREE.Raycaster();
+const _tmp = new THREE.Vector3();
+const _bodyBox = new THREE.Box3(), _headBox = new THREE.Box3();
+const _bodySize = new THREE.Vector3(0.7, 1.1, 0.5), _bodyCenter = new THREE.Vector3();
+const _headSize = new THREE.Vector3(0.45, 0.45, 0.45), _headCenter = new THREE.Vector3();
+const _bodyHit = new THREE.Vector3(), _headHit = new THREE.Vector3();
+const _end = new THREE.Vector3();
+
+function teamLabel(team) { return team === TEAM_ORANGE ? 'orange' : 'blue'; }
 
 function killCredit(killerName, victim, head) {
-  const t = victim.team === TEAM_ORANGE ? 'orange' : 'blue';
+  const t = teamLabel(victim.team);
   addFeed(hud, `<b>${killerName}</b> killed <span class="${t}">${t === 'orange' ? 'Orange' : 'Blue'}</span>${head ? ' HEADSHOT' : ''}`);
   checkRoundEnd();
 }
@@ -58,34 +65,37 @@ function shoot() {
   _ray.set(_eye, _dir);
   _ray.far = 120;
 
-  let best = null, bestDist = Infinity, headshot = false;
+  let bestDist = Infinity, bestPoint = null, victim = null, headshot = false;
   for (const other of everyone) {
     if (other === player || !other.alive || other.team === player.team) continue;
-    const bodyBox = new THREE.Box3().setFromCenterAndSize(
-      new THREE.Vector3(other.pos.x, other.pos.y + 0.9, other.pos.z), new THREE.Vector3(0.7, 1.1, 0.5));
-    const headBox = new THREE.Box3().setFromCenterAndSize(
-      new THREE.Vector3(other.pos.x, other.pos.y + 1.72, other.pos.z), new THREE.Vector3(0.45, 0.45, 0.45));
-    const hitBody = _ray.ray.intersectBox(bodyBox, new THREE.Vector3());
-    const hitHead = _ray.ray.intersectBox(headBox, new THREE.Vector3());
+    _bodyCenter.set(other.pos.x, other.pos.y + 0.9, other.pos.z);
+    _headCenter.set(other.pos.x, other.pos.y + 1.72, other.pos.z);
+    _bodyBox.setFromCenterAndSize(_bodyCenter, _bodySize);
+    _headBox.setFromCenterAndSize(_headCenter, _headSize);
+    const hitBody = _ray.ray.intersectBox(_bodyBox, _bodyHit);
+    const hitHead = _ray.ray.intersectBox(_headBox, _headHit);
     const hit = hitHead || hitBody;
     if (hit) {
       const d = hit.distanceTo(_eye);
-      if (d < bestDist) { bestDist = d; best = { other, point: hit, head: !!hitHead }; }
+      if (d < bestDist) { bestDist = d; bestPoint = hit; victim = other; headshot = !!hitHead; }
     }
   }
   // world hit for tracer endpoint
   const wallHit = _ray.intersectObjects(scene.children, true).filter((h) => !h.object.parent || !h.object.parent.isGroup)[0];
-  const end = best ? best.point : (wallHit ? wallHit.point : _eye.clone().add(_dir.multiplyScalar(120)));
-  addTracer(scene, _eye, end);
+  if (bestPoint) _end.copy(bestPoint);
+  else if (wallHit) _end.copy(wallHit.point);
+  else _end.copy(_eye).addScaledVector(_dir, 120);
+  addTracer(scene, _eye, _end);
   playShot(weapon.type);
-  if (best) {
+  if (victim) {
     const falloff = Math.max(0.55, 1 - bestDist / 90);
-    const killed = damage(best.other, spec.dmg * falloff, best.head);
+    const killed = damage(victim, spec.dmg * falloff, headshot);
     showHitmarker();
     if (killed) {
       player.money = Math.min(16000, player.money + KILL_REWARD);
       player.kills++;
-      killCredit('You', best.other, best.head);
+      kills++;
+      killCredit('You', victim, headshot);
     }
   }
 }
@@ -93,27 +103,28 @@ function shoot() {
 function botShoot(bot, target, dmg) {
   eyePos(bot, _eye);
   if (target) {
-    eyePos(target, tmpV);
-    addTracer(scene, _eye, tmpV.clone().add(new THREE.Vector3((Math.random()-0.5)*0.3, 0, (Math.random()-0.5)*0.3)));
+    eyePos(target, _tmp);
+    _tmp.x += (Math.random() - 0.5) * 0.3;
+    _tmp.z += (Math.random() - 0.5) * 0.3;
+    addTracer(scene, _eye, _tmp);
     const killed = damage(target, dmg, false);
     if (killed) {
       bot.kills++;
       if (target === player) respawnPlayer();
       const bn = bot.team === TEAM_ORANGE ? 'Orange' : 'Blue';
-      const vt = target.team === TEAM_ORANGE ? 'orange' : 'blue';
+      const vt = teamLabel(target.team);
       addFeed(hud, `<b>${bn}</b> killed <span class="${vt}">${vt === 'orange' ? 'Orange' : 'Blue'}</span>`);
       checkRoundEnd();
     }
   }
 }
-const tmpV = new THREE.Vector3();
 
 function showHitmarker() {
   const hm = document.getElementById('hitmarker');
   if (!hm) return;
   hm.classList.add('on');
   clearTimeout(hm._t);
-  hm._t = setTimeout(() => hm.classList.remove('on'), 110);
+  hm._t = setTimeout(() => hm.classList.remove('on'), HITMARKER_DELAY);
 }
 
 function respawnPlayer() {
@@ -128,25 +139,25 @@ function respawnPlayer() {
 }
 
 function checkRoundEnd() {
-  const blueAlive = everyone.filter((p) => p.team === TEAM_BLUE && p.alive).length;
-  const orangeAlive = everyone.filter((p) => p.team === TEAM_ORANGE && p.alive).length;
+  let blueAlive = 0, orangeAlive = 0;
+  for (const p of everyone) {
+    if (!p.alive) continue;
+    if (p.team === TEAM_BLUE) blueAlive++; else orangeAlive++;
+  }
   if (rounds.phase === 'live' && (blueAlive === 0 || orangeAlive === 0)) updateRounds(rounds, 0.001, everyone);
 }
 
-// overlay + start
-const overlay = document.getElementById('overlay');
+// start: click-to-play unlocks audio and locks the pointer; ?shot=... starts
+// headlessly without pointer lock for reproducible automation captures.
 function begin() {
-  overlay.hidden = true;
   startRound(rounds, everyone);
 }
 document.getElementById('play').addEventListener('click', () => {
-  overlay.hidden = true;
+  document.getElementById('overlay').hidden = true;
   unlockAudio();
-  rendererCanvas().requestPointerLock();
-  startRound(rounds, everyone);
+  engine.renderer.domElement.requestPointerLock();
+  begin();
 });
-// screenshot/automation hook: ?shot=... starts the game headlessly without pointer lock,
-// ?shot=play&yaw=<rad>&pitch=<rad>&pos=x,z aims the camera for a reproducible capture
 if (new URLSearchParams(location.search).has('shot')) {
   const q = new URLSearchParams(location.search);
   const yaw = parseFloat(q.get('yaw')); if (!Number.isNaN(yaw)) player.yaw = yaw;
@@ -177,15 +188,15 @@ document.addEventListener('keyup', (e) => {
 handleBuyClick(hud, player, (key) => { switchWeapon(weapon, key); });
 
 // camera update per frame
-view.callbacks.push((alpha, dt) => {
+view.callbacks.push(() => {
   eyePos(player, _eye);
   camera.position.copy(_eye);
   camera.rotation.set(player.pitch - weapon.recoilPitch, player.yaw, 0, 'YXZ');
 });
 
 // fixed-step systems
-let framesAlive = 0;
 let footTimer = 0;
+let ammoHint = false;
 sim.systems.push((dt, tick) => {
   const look = consumeLook();
   const moving = Math.hypot(player.vel.x, player.vel.z) > 1;
@@ -197,6 +208,10 @@ sim.systems.push((dt, tick) => {
     footTimer -= dt;
     if (footTimer <= 0) { playFootstep(!player.crouch); footTimer = player.crouch ? 0.55 : 0.38; }
   } else footTimer = 0;
+
+  // ammo hint: when the mag runs dry, point the player at the yellow crates
+  const wantHint = weapon.mag === 0 && player.alive;
+  if (wantHint !== ammoHint) { ammoHint = wantHint; setAmmoHint(ammoHint); }
 
   if (mouse.fire && player.alive && rounds.phase === 'live' && tryFire(weapon, true)) shoot();
   updateTracers(dt);
@@ -215,16 +230,13 @@ sim.systems.push((dt, tick) => {
   // ammo pickups
   updatePickups(pickups, dt, player, weapon);
 
-  const enemies = player.team === TEAM_BLUE ? botsOrange : botsBlue;
-  const mates = botsBlue;
-  for (const bot of botsOrange) updateBot(bot, dt, player.alive ? player : mates.find((m) => m.alive) || null, everyone, botShoot);
-  for (const bot of botsBlue) {
-    const t = botsOrange.find((m) => m.alive) || null;
-    updateBot(bot, dt, t, everyone, botShoot);
-  }
+  for (const bot of botsOrange) updateBot(bot, dt, player.alive ? player : botsBlue.find((m) => m.alive) || null, everyone, botShoot);
+  const orangeTarget = botsOrange.find((m) => m.alive) || null;
+  for (const bot of botsBlue) updateBot(bot, dt, orangeTarget, everyone, botShoot);
 
   updateRounds(rounds, dt, everyone, (winner) => {
-    addFeed(hud, `<b>${winner === TEAM_BLUE ? 'BLUE' : 'ORANGE'} wins the round</b>`);
+    if (rounds.drawn) addFeed(hud, `<b>round drawn</b> - even teams at time`);
+    else addFeed(hud, `<b>${winner === TEAM_BLUE ? 'BLUE' : 'ORANGE'} wins the round</b>`);
     if (rounds.matchOver) hud.scoreboard = true;
   });
   if (rounds.phase === 'over' && rounds.timer <= 0 && !rounds.matchOver) startRound(rounds, everyone);
@@ -233,7 +245,6 @@ sim.systems.push((dt, tick) => {
 // HUD per frame
 const hudState = { player, weapon, rounds, everyone, grenades, scoreboard: false };
 view.callbacks.push(() => {
-  hud.scoreboard = hud.scoreboard || !!hudState.scoreboard;
   updateHud(hud, { ...hudState, scoreboard: hud.scoreboard });
   const copy = document.getElementById('overlay-copy');
   if (copy && rounds.phase === 'over') copy.textContent = rounds.matchOver
